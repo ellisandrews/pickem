@@ -1,8 +1,13 @@
 import os
+from argparse import ArgumentParser
+from typing import Optional, Tuple
 
 import pandas as pd
 from bs4 import BeautifulSoup
 from selenium import webdriver
+
+# TODO: DELETE THIS IMPORT
+from pprint import pprint
 
 
 # TODO: Headless browser interactions?
@@ -11,7 +16,14 @@ from selenium import webdriver
 # TODO: Type hinting, docstrings
 
 
-def login(user_id, password):
+def login(user_id: str, password: str) -> None:
+    """
+    Navigate to the cbssports.com login page and submit login credentials.
+
+    Args:
+        user_id:   cbssports.com user_id
+        password:  cbssports.com password
+    """
     # Navigate to the login page
     login_url = 'https://www.cbssports.com/login'
     driver.get(login_url)
@@ -33,8 +45,10 @@ def login(user_id, password):
     submit_elem.click()
 
 
-def get_picks_table_html():
-
+def get_picks_table_html() -> str:
+    """
+    Navigate to the cbssports.com NFL pickem league weekly picks page, and retrieve the HTML for the weekly picks table.
+    """
     # TODO: Support other leagues? i.e. Don't hard-code my league's URL
     # TODO: Implement selecting the desired pick week
 
@@ -49,15 +63,15 @@ def get_picks_table_html():
     return table_html
 
 
-def parse_picks_table_html(html):
+def parse_picks_table_html(html: str) -> pd.DataFrame:
     """
     Parse the raw HTML of the NFL weekly picks table and output it as a DataFrame.
 
     Args:
-        html (str): Raw HTML string of the <table id="nflpicks"> element
+        html: Raw HTML string of the <table id="nflpicks"> element
 
     Return:
-        (pd.DataFrame): DataFrame representing the NFL weekly picks table.
+        DataFrame representing the NFL weekly picks table.
     """
     # Parse the picks table HTML with BeautifulSoup
     soup = BeautifulSoup(html, 'html.parser')
@@ -127,22 +141,103 @@ def parse_picks_table_html(html):
     return pd.DataFrame(row_data, columns=columns)
 
 
+def parse_pick(pick: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parse a given player's pick for the team and number of points wagered (if applicable).
+
+    Args:
+        pick: The player's raw pick. Comes in one of these formats:
+                  1) 'TEAM(int_points)' -- The player has made a selection ( e.g. 'KC(12)' )
+                  2) None -- The player has not made a selection
+                  3) 'X'  -- The player has made a selection that is not yet visible to other players.
+    :return:
+    """
+    # TODO: Does this belong in a utils file?
+
+    # Picks will be `None` if the player hasn't made any selections for the week yet, and will be 'X' if other players
+    #  cannot view them yet (e.g. game hasn't kicked off). In those cases, return those values with no team chosen.
+    if pick is None or pick == 'X':
+        return None, pick
+
+    # Team will '-' if the user didn't pick that specific game before it kicked off (but picked other games)
+    team, wagered_pts = pick.strip(')').split('(')
+
+    return team, wagered_pts
+
+
+def pick_to_int(pick: str) -> Optional[int]:
+
+    # We're only interested in the points wagered (if any) on each matchup)
+    _, pts = parse_pick(pick)
+
+    if pts is None or pts == 'X':
+        return None  # Should this be 0?
+    else:
+        return int(pts)
+
+
+def calculate_remaining_pts(df: pd.DataFrame) -> pd.DataFrame:
+
+    # Calculate:
+    #    1) How many total remaining points each player has left to wager
+    #    2) Which specific point values each user has left to wager
+    #    3) The maximum possible score the user could achieve on the week (correct points + total left to wager)
+
+    # 1) Remaining points = Total weekly points possible - SUM(wagered_points)
+
+    # Deep copy the DataFrame. We'll be adding/modifying columns and do not want to modify the original DF in case we
+    # want to use it elsewhere, given that it's an unadulterated representation of the scraped HTML table.
+    df = df.copy()
+
+    num_games = len(df.columns) - 4  # Number of games in the given week
+    weekly_values = sorted(range(1, num_games+1))  # Point values eligible to be wagered given number of games
+    max_pts = sum(weekly_values)  # Max number of points possible given number of games
+
+    # Extract the point value wagered by each player on each of the games, and make this the new column value
+    for column in df.columns[1:num_games+1]:
+        df[column] = df[column].apply(pick_to_int)
+
+    # Add a column that is the number of (visible) points each player has wagered thus far, and how many they have left
+    #  to wager
+    df['wagered_pts'] = df.iloc[:, 1:num_games+1].sum(axis=1)
+    df['remaining_pts'] = max_pts - df['wagered_pts']
+
+    return df
+
+
 if __name__ == '__main__':
 
-    # Instantiate a chrome webdriver for browser interactions
-    driver = webdriver.Chrome()  # TODO: Pass the explicit path to the driver in the venv/bin/?
+    a = ArgumentParser()
 
-    try:
-        # Login to cbssports.com
-        login(user_id=os.environ.get('USERID'), password=os.environ.get('PASSWORD'))
+    a.add_argument('--test_data', '-t', action='store_true',
+                   help='Run the script using a saved example webpage, skipping login and other browser interactions.')
 
-        # Navigate the the weekly game picks table page and retrieve the table HTML
-        picks_table_html = get_picks_table_html()
+    args = a.parse_args()
 
-        # Parse the picks table HTML for relevant data, and read it into a DataFrame
-        picks_df = parse_picks_table_html(picks_table_html)
+    # Read the sample data if desired (for testing, running without internet, etc.)
+    if args.test_data:
+        with open('test_data/picks_table_week_7_v2.html', 'r') as f:
+            picks_table_html = f.read()
 
-        print(picks_df.to_string())
+    # Otherwise, retrive the picks table data from the internet
+    else:
+        # Instantiate a chrome webdriver for browser interactions
+        driver = webdriver.Chrome()
 
-    finally:
-        driver.quit()
+        try:
+            # Login to cbssports.com
+            login(user_id=os.environ.get('USERID'), password=os.environ.get('PASSWORD'))
+
+            # Navigate the the weekly game picks table page and retrieve the table HTML
+            picks_table_html = get_picks_table_html()
+
+        finally:
+            driver.quit()
+
+    # Parse the picks table HTML for relevant data, and read it into a DataFrame
+    picks_df = parse_picks_table_html(picks_table_html)
+
+    # Calculate how many total points each player has left to wager on the given week
+    picks_df = calculate_remaining_pts(picks_df)
+
+    print(picks_df.to_string())

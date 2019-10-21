@@ -7,9 +7,11 @@ A simple webscraping tool for my cbssports.com NFL weekly pickem league.
 ### Setup
 Install the required packages in your **_python3_** virtual environment.
 
-`pip3 install -r requirements.txt`
+```
+pip3 install -r requirements.txt
+```
 
-Install a webdriver. [See below](#Webdriver-Installation) for details.
+Install a webdriver. [See below](#webdriver-installation) for details.
 
 Set your cbssports.com User ID and password for login as environment variables
 
