@@ -216,7 +216,7 @@ if __name__ == '__main__':
 
     # Read the sample data if desired (for testing, running without internet, etc.)
     if args.test_data:
-        with open('test_data/picks_table_week_7_v2.html', 'r') as f:
+        with open('test_data/picks_table_week_7.html', 'r') as f:
             picks_table_html = f.read()
 
     # Otherwise, retrive the picks table data from the internet
