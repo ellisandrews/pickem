@@ -87,13 +87,13 @@ def parse_picks_table_html(html: str) -> pd.DataFrame:
     games = []
 
     # Iterate over the games in the header row (exclude the non-game columns)
-    for td in game_row.contents[1:-3]:
+    for td in game_row.find_all('td')[1:-3]:
 
         # Each cell is a small table depicting the game matchup
-        for table in td.contents:
+        for table in td.find_all('table'):
 
             # Grab the table body
-            tbody = table.contents[0]
+            tbody = table.find('tbody')
 
             # Grab the two teams playing. HTML looks like:
             #  <tbody>
@@ -107,8 +107,11 @@ def parse_picks_table_html(html: str) -> pd.DataFrame:
             #    </tr>
             #  </tbody>
 
-            home_team = tbody.contents[0].contents[0].text
-            away_team = tbody.contents[1].contents[0].text
+
+            home_row, away_row = tbody.find_all('tr')
+
+            home_team = home_row.find('td').text
+            away_team = away_row.find('td').text
 
             games.append(f"{home_team}|{away_team}")
 
@@ -126,14 +129,18 @@ def parse_picks_table_html(html: str) -> pd.DataFrame:
     player_rows = soup.find('tbody', {'id': 'nflplayerRows'})
 
     # Iterate over the rows in the table (the <tr> elements)
-    for tr in player_rows.contents:
+    for tr in player_rows.find_all('tr'):
+
         row = []
-        # If players have not made their picks for the week, they will have a single cell spanning all games.
-        for td in tr.contents:
+
+        for td in tr.find_all('td'):
+
+            # If players have not made their picks for the week, they will have a single cell spanning all games.
             if not td.attrs.get('colspan'):
                 row.append(td.text)
             else:
                 row.extend([None] * int(td.attrs['colspan']))
+
         row_data.append(row)
 
     columns = ['player'] + games + ['mnf_tiebreaker', 'weekly_points', 'ytd_points']
