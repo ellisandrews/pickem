@@ -1,10 +1,11 @@
 import os
 from argparse import ArgumentParser
-from typing import Optional, Tuple
 
 import pandas as pd
 from bs4 import BeautifulSoup
 from selenium import webdriver
+
+from utils import cast_raw_pick
 
 # TODO: DELETE THIS IMPORT
 from pprint import pprint
@@ -50,7 +51,7 @@ def get_picks_table_html() -> str:
     Navigate to the cbssports.com NFL pickem league weekly picks page, and retrieve the HTML for the weekly picks table.
     """
     # TODO: Support other leagues? i.e. Don't hard-code my league's URL
-    # TODO: Implement selecting the desired pick week
+    # TODO: Implement selecting the desired pick week?
 
     # Navigate to picks page
     picks_url = 'http://football-guys.football.cbssports.com/office-pool/standings/live'
@@ -122,7 +123,7 @@ def parse_picks_table_html(html: str) -> pd.DataFrame:
     # Table format is:
     # | Player | game 1 pick | game 2 pick | ... | game n pick | MNF Points Tiebreaker | Weekly Points | YTD Points |
 
-    # Container to hold each row of data from the table. Each row will stored as list, `row_data` will be list of lists.
+    # Container to hold each row of data from the table. Each row will be stored as list.
     row_data = []
 
     # Get the Tag representing the pick rows (<tbody id="nflplayerRows">)
@@ -133,54 +134,45 @@ def parse_picks_table_html(html: str) -> pd.DataFrame:
 
         row = []
 
-        for td in tr.find_all('td'):
+        # Handle table cells for game week picks and MNF tiebreaker
+        for td in tr.find_all('td')[:-2]:
 
             # If players have not made their picks for the week, they will have a single cell spanning all games.
-            if not td.attrs.get('colspan'):
-                row.append(td.text)
-            else:
+            if td.attrs.get('colspan'):
                 row.extend([None] * int(td.attrs['colspan']))
+            else:
+                pick = td.text  # Get the pick the user made (e.g. 'KC(11)' )
+
+                # Get the class attribute of the td element (e.g. <td class="correct">... )
+                class_ = td.attrs.get('class')
+
+                if class_:
+                    if 'correct' in class_:
+                        status = 'correct'
+                    elif 'incorrect' in class_:
+                        status = 'incorrect'
+                    elif 'unlocked' in class_:
+                        status = 'hidden'
+                    else:
+                        status = 'unknown'
+                else:
+                    status = 'unknown'
+
+                row.append(f"{pick}:{status}")
 
         row_data.append(row)
 
-    columns = ['player'] + games + ['mnf_tiebreaker', 'weekly_points', 'ytd_points']
+        # Handle table cells for weekly and yearly totals
+        for td in tr.find_all('td')[-2:]:
+            row.append(int(td.text))
 
-    return pd.DataFrame(row_data, columns=columns)
+    # DataFrame column headers
+    columns = ['player'] + games + ['mnf_tiebreaker', 'weekly_pts', 'ytd_pts']
 
+    # Dump data into DF
+    df = pd.DataFrame(row_data, columns=columns)
 
-def parse_pick(pick: str) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Parse a given player's pick for the team and number of points wagered (if applicable).
-
-    Args:
-        pick: The player's raw pick. Comes in one of these formats:
-                  1) 'TEAM(int_points)' -- The player has made a selection ( e.g. 'KC(12)' )
-                  2) None -- The player has not made a selection
-                  3) 'X'  -- The player has made a selection that is not yet visible to other players.
-    :return:
-    """
-    # TODO: Does this belong in a utils file?
-
-    # Picks will be `None` if the player hasn't made any selections for the week yet, and will be 'X' if other players
-    #  cannot view them yet (e.g. game hasn't kicked off). In those cases, return those values with no team chosen.
-    if pick is None or pick == 'X':
-        return None, pick
-
-    # Team will '-' if the user didn't pick that specific game before it kicked off (but picked other games)
-    team, wagered_pts = pick.strip(')').split('(')
-
-    return team, wagered_pts
-
-
-def pick_to_int(pick: str) -> Optional[int]:
-
-    # We're only interested in the points wagered (if any) on each matchup)
-    _, pts = parse_pick(pick)
-
-    if pts is None or pts == 'X':
-        return None  # Should this be 0?
-    else:
-        return int(pts)
+    return df
 
 
 def calculate_remaining_pts(df: pd.DataFrame) -> pd.DataFrame:
@@ -202,12 +194,31 @@ def calculate_remaining_pts(df: pd.DataFrame) -> pd.DataFrame:
 
     # Extract the point value wagered by each player on each of the games, and make this the new column value
     for column in df.columns[1:num_games+1]:
-        df[column] = df[column].apply(pick_to_int)
+        df[column] = df[column].apply(lambda raw_pick: cast_raw_pick(raw_pick).points)
 
     # Add a column that is the number of (visible) points each player has wagered thus far, and how many they have left
     #  to wager
     df['wagered_pts'] = df.iloc[:, 1:num_games+1].sum(axis=1)
     df['remaining_pts'] = max_pts - df['wagered_pts']
+
+    df['max_possible_pts'] = df['weekly_pts'] + df['remaining_pts']
+
+    return df
+
+
+def format_picks_df(df: pd.DataFrame) -> pd.DataFrame:
+
+    # Deep copy the DataFrame. We'll be adding/modifying columns and do not want to modify the original DF in case we
+    # want to use it elsewhere, given that it's an unadulterated representation of the scraped HTML table.
+    df = df.copy()
+
+    num_games = len(df.columns) - 4  # Number of games in the given week
+    weekly_values = sorted(range(1, num_games + 1))  # Point values eligible to be wagered given the number of games
+    max_pts = sum(weekly_values)  # Max number of points possible given number of games
+
+    # Extract the point value wagered by each player on each of the games, and make this the new column value
+    for column in df.columns[1:num_games + 1]:
+        df[column] = df[column].apply(cast_raw_pick)
 
     return df
 
@@ -217,23 +228,26 @@ if __name__ == '__main__':
     a = ArgumentParser()
 
     a.add_argument('--test_data', '-t', action='store_true',
-                   help='Run the script using a saved example webpage, skipping login and other browser interactions.')
+                   help='Run the script using saved example HTML, skipping login and other browser interactions.')
+
+    a.add_argument('--player_name', '-p', type=str, default='Ellis Andrews',
+                   help='Your own player name on CBS.')
 
     args = a.parse_args()
 
     # Read the sample data if desired (for testing, running without internet, etc.)
     if args.test_data:
-        with open('test_data/picks_table_week_7.html', 'r') as f:
+        with open('test_data/picks_table_week_7.html', 'r') as f:  # TODO: Absolute path
             picks_table_html = f.read()
 
-    # Otherwise, retrive the picks table data from the internet
+    # Otherwise, retrieve the picks table data from the internet
     else:
         # Instantiate a chrome webdriver for browser interactions
         driver = webdriver.Chrome()
 
         try:
             # Login to cbssports.com
-            login(user_id=os.environ.get('USERID'), password=os.environ.get('PASSWORD'))
+            login(os.environ.get('USERID'), os.environ.get('PASSWORD'))
 
             # Navigate the the weekly game picks table page and retrieve the table HTML
             picks_table_html = get_picks_table_html()
@@ -241,10 +255,23 @@ if __name__ == '__main__':
         finally:
             driver.quit()
 
+    # TODO: Save (pickle? cache somehow?) the picks_table_html so don't have to wait for browser if running again.
+
     # Parse the picks table HTML for relevant data, and read it into a DataFrame
     picks_df = parse_picks_table_html(picks_table_html)
 
-    # Calculate how many total points each player has left to wager on the given week
-    picks_df = calculate_remaining_pts(picks_df)
-
     print(picks_df.to_string())
+    print()
+
+    # sandbox_df = format_picks_df(picks_df)
+
+    # print(sandbox_df.to_string())
+
+    # # TODO: Allow user to check "What if x game flipped?" scenario. Or even "What if x, y, z games flipped?"
+    # # TODO: Instead of the above, let a user input a list of winners of each game and then see what would happen
+
+    # Calculate how many total points each player has left to wager on the given week
+    remaining_pts_df = calculate_remaining_pts(picks_df)
+
+    print(remaining_pts_df.to_string())
+    print()
