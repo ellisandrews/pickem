@@ -35,29 +35,15 @@ def parse_raw_pick(raw_pick: str) -> Tuple[Optional[str], Optional[int], Optiona
     return team, int(wagered_pts), status
 
 
-# # TODO: Do we still need this function given the one below it?
-# def pick_to_int(pick: Optional[str]) -> int:
-#     """
-#     Parse a game pick string for the number of points wagered on the game. If the game has not been picked by the user
-#     or the pick is not yet visible, return 0 as the number of points wagered.
-#
-#     Args:
-#         pick: One of:   1) String representing the player's pick like 'KC(11)'.
-#                         2) 'X' -- The player has picked the game but their selection is not yet visible.
-#                         3) '-' -- The player has not picked this game, but has picked other games this week.
-#                         4) None -- The player has not picked any games this week.
-#     Return:
-#         The number of points the player wagered on the pick.
-#     """
-#     # We're only interested in the points wagered (if any) on each matchup
-#     _, pts, _ = parse_raw_pick(pick)
-#
-#     if pts is None or pts == 'X':
-#         return 0
-#     else:
-#         return int(pts)
+def cast_raw_pick(raw_pick: str) -> Pick:
+    """
+    Change a player's raw pick string to a Pick object (named tuple)
 
+    Args:
+        raw_pick: The player's raw pick.
 
-def cast_raw_pick(raw_pick):
+    Return:
+        The namedtuple representation of the raw pick.
+    """
     team, wagered_pts, status = parse_raw_pick(raw_pick)
     return Pick(team, wagered_pts, status=='correct')
