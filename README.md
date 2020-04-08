@@ -2,6 +2,12 @@
 
 A simple webscraping tool for my cbssports.com NFL weekly pickem league.
 
+<br>
+
+<p align="center">
+  <img src="./pickem_logo.png">
+</p>
+
 ## Quickstart
 
 ### Setup
